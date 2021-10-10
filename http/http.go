@@ -1,3 +1,6 @@
+// @Description: 负责节点间的通信
+// @Author: tao
+// @Update: 2021/10/10 14:00
 package HTTP
 
 import (
