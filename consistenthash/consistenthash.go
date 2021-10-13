@@ -61,4 +61,3 @@ func (m *Map) Get(key string) string {
 
 	return m.hashMap[m.vKeys[idx%len(m.vKeys)]]
 }
-

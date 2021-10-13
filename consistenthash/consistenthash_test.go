@@ -4,5 +4,4 @@ import "testing"
 
 func TestConsistentHashMap(t *testing.T)  {
 
-
 }

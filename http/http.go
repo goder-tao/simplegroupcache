@@ -4,20 +4,40 @@
 package HTTP
 
 import (
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
-	"strings"
+	"net/url"
+	"simplecache/consistenthash"
 	"simplecache/group"
+	"simplecache/peer"
+	"strings"
+	"sync"
 )
 
-const defaultBasePath = "/simplecache/"
 
-// 节点间通信的数据结构
+const (
+	// 域名下用来做缓存之间通信的子路径
+	defaultBasePath = "/simplecache/"
+	defaultReplicas = 50
+)
+
+// 负责节点间通信的数据结构, 每个节点持有一个，保存所有获取到其他节点的信息和方式
 type HTTPPool struct {
 	self string
 	basePath string
+	mu sync.Mutex
+	peerMap *consistenthash.Map
+	httpGetterMap map[string]*httpGetter     // key ---> http://ip:port
 }
+
+type httpGetter struct {
+	// 远程节点的域名地址/basePath/
+	baseURL string
+}
+var _ peer.PeerGetter = (*httpGetter)(nil)
 
 func NewHTTPPool(self string) *HTTPPool {
 	return &HTTPPool{
@@ -31,7 +51,29 @@ func (p *HTTPPool) Log(format string, v ...interface{}) {
 	log.Printf("[Server %s] %s", p.self, fmt.Sprintf(format, v...))
 }
 
-//
+// Set init or reset the pool member
+func (p *HTTPPool) Set(urls ...string)  {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.peerMap = consistenthash.New(defaultReplicas, nil)
+	p.peerMap.Add(urls...)
+	p.httpGetterMap = make(map[string]*httpGetter)
+	for _, u := range urls {
+		p.httpGetterMap[u] = &httpGetter{baseURL: u+p.basePath}
+	}
+}
+
+// Pick pick the specific httpGetter
+func (p *HTTPPool) Pick(key string) (peer peer.PeerGetter, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if peer := p.peerMap.Get(key); peer != "" && peer != p.self {
+		p.Log("pick peer %v", peer)
+		return p.httpGetterMap[peer], true
+	}
+	return nil, false
+}
+
 func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// url必须以basePath开头
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
@@ -71,11 +113,33 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//    text/gif
 	//    text/png
 	//    text/jpeg
-	// 2. application格式
+	// 2. application格式:
 	//	  application/xml
 	//	  application/pdf
 	//	  application/json
 	//	  application/octet-stream  --- 二进制流数据
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(view.ByteSlice())
+}
+
+// <--- httpGetter的方法 --->
+func (h *httpGetter) Get(member string, key string) ([]byte, error) {
+	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(member), url.QueryEscape(key))
+
+	res, err := http.Get(u)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New("get fail, status code: "+string(res.StatusCode))
+	}
+
+	bytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, errors.New("reading response body: "+err.Error())
+	}
+
+	return bytes, nil
 }
