@@ -6,12 +6,14 @@ package HTTP
 import (
 	"errors"
 	"fmt"
+	"github.com/golang/protobuf/proto"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"simplecache/consistenthash"
 	"simplecache/group"
+	"simplecache/pb"
 	"simplecache/peer"
 	"strings"
 	"sync"
@@ -70,6 +72,8 @@ func (p *HTTPPool) Pick(key string) (peer peer.PeerGetter, ok bool) {
 	if peer := p.peerMap.Get(key); peer != "" && peer != p.self {
 		p.Log("pick peer %v", peer)
 		return p.httpGetterMap[peer], true
+	} else {
+		fmt.Println("no peek"+peer)
 	}
 	return nil, false
 }
@@ -106,6 +110,11 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
+	if err != nil {
+		http.Error(w, "proto encoding fail", http.StatusInternalServerError)
+	}
+
 	// 几种常见的http content-type
 	// 1. 媒体格式：
 	//    text/html
@@ -119,12 +128,12 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	//	  application/json
 	//	  application/octet-stream  --- 二进制流数据
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(view.ByteSlice())
+	w.Write(body)
 }
 
 // <--- httpGetter的方法 --->
-func (h *httpGetter) Get(member string, key string) ([]byte, error) {
-	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(member), url.QueryEscape(key))
+func (h *httpGetter) Get(req *pb.Request) (*pb.Response, error) {
+	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(req.Member), url.QueryEscape(req.Key))
 
 	res, err := http.Get(u)
 	if err != nil {
@@ -141,5 +150,10 @@ func (h *httpGetter) Get(member string, key string) ([]byte, error) {
 		return nil, errors.New("reading response body: "+err.Error())
 	}
 
-	return bytes, nil
+	p := &pb.Response{}
+	if err := proto.Unmarshal(bytes, p); err != nil {
+		return nil, err
+	}
+
+	return p, nil
 }

@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log"
 	"simplecache/lru"
+	"simplecache/pb"
 	"simplecache/peer"
+	"simplecache/singleflight"
 	"sync"
 )
 
@@ -30,6 +32,7 @@ type Member struct {
 	getter Getter
 	mCache *lru.Cache
 	picker peer.PeerPicker
+	loader *singleflight.Group
 }
 
 type Group struct {
@@ -52,6 +55,7 @@ func NewMember(name string, cacheSize int64, getter Getter, onEvicted func(key s
 		name: name,
 		getter: getter,
 		mCache: lru.NewCache(cacheSize, onEvicted),
+		loader: &singleflight.Group{},
 	}
 	defaultGroup.group[name] = m
 	return m
@@ -116,18 +120,30 @@ func (m *Member) Get(key string) (lru.ByteValue, error) {
 }
 
 func (m *Member) load(key string) (lru.ByteValue, error) {
-	if m.picker != nil {
-		if peer, ok := m.picker.Pick(key); ok {
-			// 从远程节点查当前节点(name)需要的key对应的数据
-			bytes, err := peer.Get(m.name, key)
-			if err == nil {
-				return lru.ByteValue{B: bytes}, nil
-			} else {
-				log.Println("Failed to get from remote peer, "+err.Error())
+	view, err := m.loader.DoOnce(key, func() (interface{}, error) {
+		if m.picker != nil {
+			if peer, ok := m.picker.Pick(key); ok {
+				// 从远程节点查当前节点(name)需要的key对应的数据
+				req := &pb.Request{
+					Member: m.name,
+					Key: key,
+				}
+				resp, err := peer.Get(req)
+				if err == nil {
+					return lru.ByteValue{B: resp.Value}, nil
+				} else {
+					log.Println("Failed to get from remote peer, "+err.Error())
+				}
 			}
 		}
+		return m.getLocally(key)
+	})
+
+	if err != nil {
+		return lru.ByteValue{}, err
+	} else {
+		return view.(lru.ByteValue), nil
 	}
-	return m.getLocally(key)
 }
 
 func (m *Member) getLocally(key string) (lru.ByteValue, error) {

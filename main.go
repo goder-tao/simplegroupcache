@@ -22,7 +22,7 @@ func startCacheService(addr string, addrs []string, m *group.Member)  {
 	pool.Set(addrs...)
 	m.RegisterPeers(pool)
 	log.Println("cache service is starting at "+addr)
-	log.Fatal(http.ListenAndServe(addr, pool))
+	log.Fatal(http.ListenAndServe(addr[7:], pool).Error())
 }
 
 // startApiService
@@ -65,7 +65,7 @@ func main() {
 	var addrs  = []string{"http://localhost:8001", "http://localhost:8002", "http:localhost:8003"}
 
 	if api {
-		startApiService(addrApi, m)
+		go startApiService(addrApi, m)
 	}
 	startCacheService("http://localhost:"+strconv.Itoa(port), addrs, m)
 }
