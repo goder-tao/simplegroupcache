@@ -35,19 +35,31 @@ func New(replicas int, fn Hash) *Map {
 	return m
 }
 
-// 添加一系列节点，并映射成replicas个虚拟节点
-func (m* Map) Add(keys ...string)  {
-	for _, key := range keys {
+// Add 添加一系列节点，并映射成replicas个虚拟节点
+func (m*Map) Add(peers ...string)  {
+	for _, peer := range peers {
 		for i := 0; i < m.replicas; i++ {
-			vHash := int(m.hash([]byte(strconv.Itoa(i)+key)))
+			vHash := int(m.hash([]byte(strconv.Itoa(i)+peer)))
 			m.vKeys = append(m.vKeys, vHash)
-			m.hashMap[vHash] = key
+			m.hashMap[vHash] = peer
 		}
 	}
 	sort.Ints(m.vKeys)
 }
 
-// 根据key获得hash环上的最合适的节点
+// Delete 删除一系列节点
+func (m *Map) Delete(peers ...string)  {
+	for _, addr := range peers {
+		for i := 0; i < m.replicas; i++ {
+			vHash := int(m.hash([]byte(strconv.Itoa(i)+addr)))
+			idx := sort.SearchInts(m.vKeys, vHash)
+			m.vKeys = append(m.vKeys[:idx], m.vKeys[idx+1:]...)
+			delete(m.hashMap, vHash)
+		}
+	}
+}
+
+// Get 根据key获得hash环上的最合适的节点
 func (m *Map) Get(key string) string {
 	if len(m.vKeys) == 0 {
 		return ""
@@ -58,6 +70,5 @@ func (m *Map) Get(key string) string {
 	idx := sort.Search(len(m.vKeys), func(i int) bool {
 		return m.vKeys[i] >= hash
 	})
-
 	return m.hashMap[m.vKeys[idx%len(m.vKeys)]]
 }

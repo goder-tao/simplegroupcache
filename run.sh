@@ -3,14 +3,22 @@
 trap "rm server; kill 0" EXIT
 
 go build -o server
-./server -port=8001 -api=false &
-./server -port=8002 -api=false &
-./server -port=8003 -api=true  &
+./server -ip=localhost -port=8101 -api=true -register=true  &
+./server -ip=localhost -port=8102 &
+./server -ip=localhost -port=8103 &
 
 sleep 2
 echo ">>> test"
-curl "http://localhost:9999/api?key=Tom" &
-curl "http://localhost:9999/api?key=Tom" &
-curl "http://localhost:9999/api?key=Tom" &
+curl "http://localhost:12000/api?key=Tom" &
+sleep 1 &
+curl "http://localhost:12000/api?key=Tom" &
+sleep 1 &
+curl "http://localhost:12000/api?key=Tom" &
+sleep 1 &
+curl "http://localhost:12000/api?key=Jack" &
+sleep 1 &
+curl "http://localhost:12000/api?key=Jack" &
+sleep 1 &
+curl "http://localhost:12000/api?key=Sam" &
 
 wait

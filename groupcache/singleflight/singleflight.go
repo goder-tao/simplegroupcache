@@ -10,8 +10,8 @@ type call struct {
 
 // Group 保存将所有并发一个key的请求用一个call实例来表示
 type Group struct {
-	mu sync.Mutex				// 并发保护map
-	m map[string]*call			// 保存并发同一个key的call
+	mu sync.Mutex      // 并发保护map
+	m map[string]*call // 保存并发同一个key的call
 }
 
 // DoOnce make sure that fn do only once

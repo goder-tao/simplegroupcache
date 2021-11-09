@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"simplecache/lru"
-	"simplecache/pb"
-	"simplecache/peer"
-	"simplecache/singleflight"
+	"simplecache/groupcache/lru"
+	"simplecache/groupcache/pb"
+	"simplecache/groupcache/peer"
+	"simplecache/groupcache/singleflight"
 	"sync"
 )
 
@@ -20,13 +20,14 @@ type Getter interface {
 }
 
 // 接口型函数, 调用接口的方法相当于调用自己，让一个函数能够当成回调传入
+// 可替换多种不同的函数，只要保持和接口定义的类型一致即可，IOP编程
 type GetFunc func(key string) ([]byte, error)
 
 func (g GetFunc) Get(key string) ([]byte, error) {
 	return g(key)
 }
 
-// 一种类型的缓存
+// 一种类型的缓存, 多种类型的缓存构成了group，在同一个节点上
 type Member struct {
 	name   string
 	getter Getter
@@ -52,7 +53,7 @@ func NewMember(name string, cacheSize int64, getter Getter, onEvicted func(key s
 	defaultGroup.mu.Lock()
 	defer defaultGroup.mu.Unlock()
 	m := &Member{
-		name: name,
+		name:   name,
 		getter: getter,
 		mCache: lru.NewCache(cacheSize, onEvicted),
 		loader: &singleflight.Group{},
@@ -77,7 +78,7 @@ func (g *Group) NewMember(name string, cacheSize int64, getter Getter, onEvicted
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	m := &Member{
-		name: name,
+		name:   name,
 		getter: getter,
 		mCache: lru.NewCache(cacheSize, onEvicted),
 	}
@@ -94,12 +95,12 @@ func (g *Group) GetMember(name string) *Member {
 
 
 // Member的方法
-func (m *Member) RegisterPeers(peer peer.PeerPicker) {
+func (m *Member) RegisterPeers(picker peer.PeerPicker) {
 	if m.picker != nil {
 		fmt.Printf("%v has picker aleady", m.name)
 		return
 	}
-	m.picker = peer
+	m.picker = picker
 }
 
 // Get 流程：
@@ -113,7 +114,7 @@ func (m *Member) Get(key string) (lru.ByteValue, error) {
 		return lru.ByteValue{}, errors.New("invalid key")
 	}
 	if v, err := m.mCache.Get(key); err == nil {
-		fmt.Println("cache hit")
+		fmt.Println("cache hit at:")
 		return v, nil
 	}
 	return m.load(key)
@@ -122,6 +123,7 @@ func (m *Member) Get(key string) (lru.ByteValue, error) {
 func (m *Member) load(key string) (lru.ByteValue, error) {
 	view, err := m.loader.DoOnce(key, func() (interface{}, error) {
 		if m.picker != nil {
+			// 根据key在hash环上的映射，到peerGetter
 			if peer, ok := m.picker.Pick(key); ok {
 				// 从远程节点查当前节点(name)需要的key对应的数据
 				req := &pb.Request{

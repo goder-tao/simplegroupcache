@@ -19,7 +19,7 @@ type Cache struct {
 func NewCache(maxBytes int64, onEvicted func(key string, value Value)) *Cache {
 	if onEvicted == nil {
 		return &Cache{
-			maxSize: maxBytes,
+			maxSize:   maxBytes,
 			OnEvicted: defaultEvicted,
 		}
 	} else {

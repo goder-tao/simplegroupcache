@@ -1,6 +1,7 @@
 // @Description: 负责节点间的通信
 // @Author: tao
 // @Update: 2021/10/10 14:00
+
 package HTTP
 
 import (
@@ -11,10 +12,10 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"simplecache/consistenthash"
-	"simplecache/group"
-	"simplecache/pb"
-	"simplecache/peer"
+	"simplecache/groupcache/consistenthash"
+	"simplecache/groupcache/group"
+	"simplecache/groupcache/pb"
+	"simplecache/groupcache/peer"
 	"strings"
 	"sync"
 )
@@ -23,16 +24,16 @@ import (
 const (
 	// 域名下用来做缓存之间通信的子路径
 	defaultBasePath = "/simplecache/"
-	defaultReplicas = 50
+	defaultReplicas = 5
 )
 
 // 负责节点间通信的数据结构, 每个节点持有一个，保存所有获取到其他节点的信息和方式
 type HTTPPool struct {
-	self string
+	addr string
 	basePath string
 	mu sync.Mutex
 	peerMap *consistenthash.Map
-	httpGetterMap map[string]*httpGetter     // key ---> http://ip:port
+	httpGetterMap map[string]*httpGetter // key ---> http://ip:port
 }
 
 type httpGetter struct {
@@ -43,14 +44,18 @@ var _ peer.PeerGetter = (*httpGetter)(nil)
 
 func NewHTTPPool(self string) *HTTPPool {
 	return &HTTPPool{
-		self: self,
+		addr:     self,
 		basePath: defaultBasePath,
 	}
 }
 
 // <--- HTTPPool方法 --->
 func (p *HTTPPool) Log(format string, v ...interface{}) {
-	log.Printf("[Server %s] %s", p.self, fmt.Sprintf(format, v...))
+	log.Printf("[Server %s] %s", p.addr, fmt.Sprintf(format, v...))
+}
+
+func (p HTTPPool)GetAddr() string {
+	return p.addr
 }
 
 // Set init or reset the pool member
@@ -66,19 +71,42 @@ func (p *HTTPPool) Set(urls ...string)  {
 }
 
 // Pick pick the specific httpGetter
-func (p *HTTPPool) Pick(key string) (peer peer.PeerGetter, ok bool) {
+func (p *HTTPPool) Pick(key string) (peer.PeerGetter, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if peer := p.peerMap.Get(key); peer != "" && peer != p.self {
-		p.Log("pick peer %v", peer)
-		return p.httpGetterMap[peer], true
+	if addr := p.peerMap.Get(key); addr != "" && addr != p.addr {
+		p.Log("pick peer %v", addr)
+		return p.httpGetterMap[addr], true
 	} else {
-		fmt.Println("no peek"+peer)
+		log.Println("pick self: "+p.addr)
 	}
 	return nil, false
 }
 
 func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	servers := r.Header.Get("Servers")
+	if servers != "" {
+		switch r.Method {
+		case "POST":
+			log.Println("new peer:"+servers)
+			p.peerMap.Add(strings.Split(servers, ",")...)
+			for _, u := range strings.Split(servers, ",") {
+				p.httpGetterMap[u] = &httpGetter{baseURL: u+p.basePath}
+			}
+		case "DELETE":
+			// bug
+			p.peerMap.Delete(strings.Split(servers, ",")...)
+			for _, u := range strings.Split(servers, ",") {
+				delete(p.httpGetterMap, u)
+			}
+		default:
+		}
+	} else {
+		p.servePeer(w, r)
+	}
+}
+
+func (p *HTTPPool) servePeer(w http.ResponseWriter, r *http.Request)  {
 	// url必须以basePath开头
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
 		http.Error(w, "HTTPPool server unexpected path: "+r.URL.Path, http.StatusForbidden)
