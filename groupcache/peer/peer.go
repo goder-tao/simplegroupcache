@@ -1,13 +1,15 @@
 package peer
 
-import "simplecache/groupcache/pb"
+import (
+	"simplecache/groupcache/lru"
+)
 
-// 远程节点处获取，找到PeerGetter，每个peer有一个独一无二的key --> ip地址
+// 通过某种方式pick到peer的接口，eg通过一致性hash获取到target peer的接口
 type PeerPicker interface {
 	Pick(key string) (peer PeerGetter, ok bool)
 }
 
-// 通过http调用远程peer查询peer缓存的接口
+// 从远程peer查询peer缓存的接口，最核心参数就是namespace和key，编解码的细节交给codec完成
 type PeerGetter interface {
-	Get(req *pb.Request) (*pb.Response, error)
+	Get(name, key string) (lru.ByteValue, error)
 }

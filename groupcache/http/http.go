@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"simplecache/groupcache/consistenthash"
 	"simplecache/groupcache/group"
+	"simplecache/groupcache/lru"
 	"simplecache/groupcache/pb"
 	"simplecache/groupcache/peer"
 	"strings"
@@ -160,28 +161,28 @@ func (p *HTTPPool) servePeer(w http.ResponseWriter, r *http.Request)  {
 }
 
 // <--- httpGetter的方法 --->
-func (h *httpGetter) Get(req *pb.Request) (*pb.Response, error) {
-	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(req.Member), url.QueryEscape(req.Key))
+func (h *httpGetter) Get(name, key string) (lru.ByteValue, error) {
+	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(name), url.QueryEscape(key))
 
 	res, err := http.Get(u)
 	if err != nil {
-		return nil, err
+		return lru.ByteValue{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, errors.New("get fail, status code: "+string(res.StatusCode))
+		return lru.ByteValue{}, errors.New("get fail, status code: "+string(res.StatusCode))
 	}
 
 	bytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return nil, errors.New("reading response body: "+err.Error())
+		return lru.ByteValue{}, errors.New("reading response body: "+err.Error())
 	}
 
 	p := &pb.Response{}
 	if err := proto.Unmarshal(bytes, p); err != nil {
-		return nil, err
+		return lru.ByteValue{}, err
 	}
 
-	return p, nil
+	return lru.ByteValue{B: p.Value}, nil
 }

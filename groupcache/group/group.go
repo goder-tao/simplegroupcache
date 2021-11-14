@@ -6,11 +6,10 @@ package group
 import (
 	"errors"
 	"fmt"
-	"log"
 	"simplecache/groupcache/lru"
-	"simplecache/groupcache/pb"
 	"simplecache/groupcache/peer"
 	"simplecache/groupcache/singleflight"
+	"simplecache/util"
 	"sync"
 )
 
@@ -93,6 +92,19 @@ func (g *Group) GetMember(name string) *Member {
 	return m
 }
 
+// PeerGet 实现远程peer通过网络请求当前cache server的功能
+// -----> 缓存中获取 ---yes--->  直接返回
+//            | no
+//             --------->  底层存储获取
+func (m *Member)PeerGet(key string) (lru.ByteValue, error) {
+	v, err := m.mCache.Get(key)
+	if err == nil {
+		fmt.Println("remote cache hit")
+		return v, nil
+	}
+	return m.getLocally(key)
+}
+
 
 // Member的方法
 func (m *Member) RegisterPeers(picker peer.PeerPicker) {
@@ -114,7 +126,7 @@ func (m *Member) Get(key string) (lru.ByteValue, error) {
 		return lru.ByteValue{}, errors.New("invalid key")
 	}
 	if v, err := m.mCache.Get(key); err == nil {
-		fmt.Println("cache hit at:")
+		fmt.Println("local cache hit")
 		return v, nil
 	}
 	return m.load(key)
@@ -126,15 +138,11 @@ func (m *Member) load(key string) (lru.ByteValue, error) {
 			// 根据key在hash环上的映射，到peerGetter
 			if peer, ok := m.picker.Pick(key); ok {
 				// 从远程节点查当前节点(name)需要的key对应的数据
-				req := &pb.Request{
-					Member: m.name,
-					Key: key,
-				}
-				resp, err := peer.Get(req)
+				resp, err := peer.Get(m.name, key)
 				if err == nil {
-					return lru.ByteValue{B: resp.Value}, nil
+					return resp, nil
 				} else {
-					log.Println("Failed to get from remote peer, "+err.Error())
+					util.Error("Failed to get from remote peer, "+err.Error())
 				}
 			}
 		}
@@ -148,6 +156,7 @@ func (m *Member) load(key string) (lru.ByteValue, error) {
 	}
 }
 
+// getLocally 实现在本地调用底层存储获取数据
 func (m *Member) getLocally(key string) (lru.ByteValue, error) {
 	 bytes, err := m.getter.Get(key)
 	 if err != nil {

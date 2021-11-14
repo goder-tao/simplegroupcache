@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package pb;
+option go_package = "../pb";
+
+
+message RPCRequest {
+	string name = 1;
+	string key = 2;
+	string err = 3;
+}
+
+message RPCResponse {
+	bytes value = 1;
+}

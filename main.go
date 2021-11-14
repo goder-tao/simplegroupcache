@@ -8,6 +8,8 @@ import (
 	"simplecache/groupcache/group"
 	HTTP "simplecache/groupcache/http"
 	"simplecache/groupcache/register"
+	"simplecache/rpc"
+	"simplecache/util"
 	"strconv"
 	"time"
 )
@@ -18,20 +20,49 @@ var db = map[string]string {
 	"Sam":  "567",
 }
 
-// startCacheService
-func startCacheService(resiger, addr string, m *group.Member)  {
-	pool := HTTP.NewHTTPPool(addr)
-	m.RegisterPeers(pool)
-	addrs, err := register.RegisterAndHeartBeat(resiger, addr, 0)
-	if err != nil {
-		fmt.Println("register and start heartbeat: "+err.Error())
+// StartCacheServer 可选tcp或者http开启缓存服务
+func StartCacheServer(network, ip, registerAddr, codecType string, port int, m *group.Member) {
+	switch network {
+	case "tcp":
+		pool := rpc.NewRPCPool(ip+":"+strconv.Itoa(port+rpc.OFF), nil)
+		m.RegisterPeers(pool)
+		go pool.AcceptAndServe()
+		addrs, codecs, err := register.RegisterAndHeartBeat(registerAddr, ip+":"+strconv.Itoa(port), codecType, 0)
+		if err != nil {
+			util.Error("register and start heartbeat: "+err.Error())
+			return
+		}
+		if len(codecs) != 0{
+			if len(codecs) != len(addrs) {
+				util.Fatal("codecs and addrs length no equal")
+			} else {
+				for i := 0 ; i < len(codecs); i++ {
+					pool.Add(codecs[i], addrs[i])
+				}
+			}
+		} else {
+			pool.Add(rpc.DEFAULT_CODEC, addrs...)
+		}
+		util.Info("cache service is starting at "+ip+":"+strconv.Itoa(port+123))
+		// http监听注册中心的消息
+		util.Fatal(http.ListenAndServe(ip+":"+strconv.Itoa(port), pool).Error())
+	case "http":
+		pool := HTTP.NewHTTPPool(ip+":"+strconv.Itoa(port))
+		m.RegisterPeers(pool)
+		addrs, _, err := register.RegisterAndHeartBeat(registerAddr, ip+":"+strconv.Itoa(port), "", 0)
+		if err != nil {
+			util.Info("register and start heartbeat: "+err.Error())
+			return
+		}
+		pool.Set(addrs...)
+		util.Info("cache service is starting at "+ip+":"+strconv.Itoa(port))
+		util.Fatal(http.ListenAndServe(ip+":"+strconv.Itoa(port), pool).Error())
+	default:
+		util.Fatal("unknown network")
 		return
 	}
-	fmt.Printf("get available server: %v",addrs)
-	pool.Set(addrs...)
-	log.Println("cache service is starting at "+addr)
-	log.Fatal(http.ListenAndServe(addr[7:], pool).Error())
 }
+
 
 // startApiService 外露一个api接口，让所有的前端请求都打到这台机器上，api服务器上先查看是否
 // 请求的数据缓存在本地，如果不是调用concurrenthahs找到目标
@@ -48,7 +79,7 @@ func startApiService(apiAddr string, m *group.Member) {
 			}
 		}))
 
-	log.Println("font-end service is running at "+apiAddr)
+	util.Info("font-end service is running at "+apiAddr)
 	// handle定义了，handler不必再传值
 	log.Fatal(http.ListenAndServe(apiAddr[7:], nil))
 }
@@ -56,8 +87,8 @@ func startApiService(apiAddr string, m *group.Member) {
 // startRegisterService 开启一个注册中心服务
 func startRegisterService(addr string, interval time.Duration)  {
 	c := register.NewRegisterCenter(addr, interval)
-	log.Println("register service is running at: "+addr)
-	log.Fatal(http.ListenAndServe(addr[7:], c))
+	util.Info("register service is running at: "+addr)
+	util.Error(http.ListenAndServe(addr[7:], c).Error())
 }
 
 func main() {
@@ -82,21 +113,25 @@ func main() {
 		}), nil)
 
 	addrApi := "http://localhost:12000"
-	registerAddr := "http://localhost:12001"
+	registerAddr := "http://localhost:12012"
 
 
 	if rgster {
 		go startRegisterService(registerAddr, 0)
 	}
 
+	
+
 	if api {
 		go startApiService(addrApi, m)
-		time.Sleep(1000)
+		time.Sleep(time.Second)
 	}
 
 	if len(ip) != 0 {
-		startCacheService(registerAddr, "http://"+ip+":"+strconv.Itoa(port), m)
+		time.Sleep(1*time.Second)
+		StartCacheServer("tcp", ip, registerAddr, rpc.DEFAULT_CODEC, port, m)
 	} else {
 		log.Fatal("invalid addr")
 	}
+
 }
