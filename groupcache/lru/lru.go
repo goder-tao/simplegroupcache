@@ -63,6 +63,15 @@ func (c *cache) Remove() {
 	}
 }
 
+func (c *cache) RemoveNode(key string) Value {
+	if ele, ok := c.cache[key]; ok {
+		c.ll.Remove(ele)
+		return ele.Value.(*entry).value
+	} else {
+		return nil
+	}
+}
+
 // 新增节点
 func (c *cache) Add(key string, value Value) {
 	if ele, ok := c.cache[key]; ok { // k-v已经存在了，覆盖

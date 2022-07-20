@@ -6,12 +6,19 @@ package group
 import (
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"simplecache/groupcache/backend"
+	"simplecache/groupcache/filter"
+	"simplecache/groupcache/filter/bloomfilter"
 	"simplecache/groupcache/lru"
 	"simplecache/groupcache/peer"
 	"simplecache/groupcache/singleflight"
 	"simplecache/util"
 	"sync"
+	"time"
 )
+
+const defaultDoubleDeleteDelayMS = 200
 
 // 缓存未命中时的回调方法，由用户来提供实现
 type Getter interface {
@@ -26,13 +33,16 @@ func (g GetFunc) Get(key string) ([]byte, error) {
 	return g(key)
 }
 
-// 一种类型的缓存, 多种类型的缓存构成了group，在同一个节点上
+// Member 一种类型的缓存, 多种类型的缓存构成了group，在同一个节点上
+// 统筹其他几个组件: picker, getter(from data source), loader, bloom filter
 type Member struct {
 	name   string
 	getter Getter
 	mCache *lru.Cache
 	picker peer.PeerPicker
 	loader *singleflight.Group
+	filter filter.Filter
+	bkd backend.Backend
 }
 
 type Group struct {
@@ -55,7 +65,8 @@ func NewMember(name string, cacheSize int64, getter Getter, onEvicted func(key s
 		name:   name,
 		getter: getter,
 		mCache: lru.NewCache(cacheSize, onEvicted),
-		loader: &singleflight.Group{},
+		loader: singleflight.New(),
+		filter: bloomfilter.New(1000000, 5, fnv.New64()),
 	}
 	defaultGroup.group[name] = m
 	return m
@@ -92,7 +103,7 @@ func (g *Group) GetMember(name string) *Member {
 	return m
 }
 
-// PeerGet 实现远程peer通过网络请求当前cache server的功能
+// PeerGet 处理远程peer通过网络请求当前cache server的功能
 // -----> 缓存中获取 ---yes--->  直接返回
 //            | no
 //             --------->  底层存储获取
@@ -115,21 +126,44 @@ func (m *Member) RegisterPeers(picker peer.PeerPicker) {
 	m.picker = picker
 }
 
-// Get 流程：
+// Get 处理负载均衡器直接打到节点上来的请求
+// 流程：
 // -------------> 本地Cache获取 ----------是-------------> 获取缓存的数据
 //                     | 否
 //                     |-----> 远程peer获取 --------是-------> 获取成功 -------->返回数据
 //                                 | 否                         | 失败
 //                                 |-----> 磁盘io读取数据 -----> io数据
 func (m *Member) Get(key string) (lru.ByteValue, error) {
-	if len(key) == 0 {
+	if len(key) == 0 || !m.filter.Contain(key) {
 		return lru.ByteValue{}, errors.New("invalid key")
 	}
+
+	m.filter.Contain(key)
 	if v, err := m.mCache.Get(key); err == nil {
 		fmt.Println("local cache hit")
 		return v, nil
 	}
 	return m.load(key)
+}
+
+// Put 采用Cache aside pattern + 延时删除策略保证一致性
+func (m *Member) Put(key string, value []byte) (err error) {
+	// 1. update backend first
+	err = m.bkd.Put(key, value)
+	if err != nil {
+		return
+	}
+
+	// 2. delete cache then
+	m.mCache.RemoveKey(key)
+
+	// 3. double delay delete cache
+	go func() {
+		time.Sleep(defaultDoubleDeleteDelayMS*time.Millisecond)
+		m.mCache.RemoveKey(key)
+	}()
+
+	return nil
 }
 
 func (m *Member) load(key string) (lru.ByteValue, error) {
@@ -165,5 +199,6 @@ func (m *Member) getLocally(key string) (lru.ByteValue, error) {
 
 	value := lru.ByteValue{B: bytes}
 	m.mCache.Add(key, value)
+	m.filter.Put(key)
 	return value, nil
 }

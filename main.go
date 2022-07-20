@@ -85,10 +85,10 @@ func startApiService(apiAddr string, m *group.Member) {
 }
 
 // startRegisterService 开启一个注册中心服务
-func startRegisterService(addr string, interval time.Duration)  {
-	c := register.NewRegisterCenter(addr, interval)
-	util.Info("register service is running at: "+addr)
-	util.Error(http.ListenAndServe(addr[7:], c).Error())
+func startRegisterService(url string, interval time.Duration)  {
+	c := register.NewRegisterCenter(url, interval)
+	util.Info("register service is running at: "+url)
+	util.Error(http.ListenAndServe(url[7:], c).Error())
 }
 
 func main() {
@@ -112,7 +112,7 @@ func main() {
 			return nil, fmt.Errorf("no such key data: %v", key)
 		}), nil)
 
-	addrApi := "http://localhost:12000"
+	// addrApi := "http://localhost:12000"
 	registerAddr := "http://localhost:12012"
 
 
@@ -120,12 +120,10 @@ func main() {
 		go startRegisterService(registerAddr, 0)
 	}
 
-	
-
-	if api {
-		go startApiService(addrApi, m)
-		time.Sleep(time.Second)
-	}
+	//if api {
+	//	go startApiService(addrApi, m)
+	//	time.Sleep(time.Second)
+	//}
 
 	if len(ip) != 0 {
 		time.Sleep(1*time.Second)

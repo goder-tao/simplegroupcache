@@ -17,7 +17,7 @@ import (
 const (
 	DEFAULT_CHECK_INTERVAL = time.Second * 20
 	DEFAULT_HEARTBEAT_INTERVAL = time.Second * 10
-
+	LISTEN_PORT = 12000
 	// code
 	REGISTER = "Register"
 	SERVER = "Server"
@@ -43,6 +43,7 @@ func NewRegisterCenter(addr string, checkInterval time.Duration) *Center {
 	if checkInterval == 0 {
 		checkInterval = DEFAULT_CHECK_INTERVAL
 	}
+
 	c := &Center{
 		servers:  make(map[string]*serverItem),
 		checkInterval: checkInterval,
@@ -65,7 +66,8 @@ func NewRegisterCenter(addr string, checkInterval time.Duration) *Center {
 func (c *Center) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case "POST":
-		addr := req.Header.Get(REGISTER)
+		//addr := req.Header.Get(REGISTER)
+		addr := util.RemoteIp(req)
 		codecType := req.Header.Get(CODEC)
 		if addr == "" {
 			util.Error("register receive empty address")
@@ -103,17 +105,23 @@ func (c *Center) register(addr, codecType string) {
 			req.Header.Set(CODEC, codecType)
 			_, _ = httpClient.Do(req)
 		}
-		util.Info("register server: "+addr)
+		util.Info("register server: "+addr+", time: "+c.servers[addr].lastUpdateTIme.String())
 	}
 	return
 }
 
 // healthyCheck 健康检查，在创建注册中心对象的时候开启一个线程持续循环调用
 func (c *Center) healthyCheck() {
+	var internal time.Duration
+	if c.checkInterval == 0 {
+		internal = DEFAULT_CHECK_INTERVAL
+	} else {
+		internal = c.checkInterval
+	}
 	unhealth := []string{}
 	for addr, item := range c.servers {
 		// 超时未心跳
-		if time.Now().Nanosecond()-item.lastUpdateTIme.Nanosecond() > int(DEFAULT_CHECK_INTERVAL.Nanoseconds()) {
+		if int64(time.Now().UnixNano()-item.lastUpdateTIme.UnixNano()) > internal.Nanoseconds() {
 			unhealth = append(unhealth, item.Addr)
 			c.mu.Lock()
 			delete(c.servers, addr)
@@ -122,6 +130,7 @@ func (c *Center) healthyCheck() {
 	}
 
 	unhealthJoin := strings.Join(unhealth, ",")
+	util.Info("unhealthy node: "+unhealthJoin)
 	// 对于不健康的节点通知所有的其他server
 	if len(unhealth) > 0 {
 		for addr, _ := range c.servers {
@@ -152,18 +161,18 @@ func (c *Center) getAllCodec() []string {
 
 // RegisterAndHeartBeat register暴露的方法，供cache server创建的时候调用，首先发送一个HeartBeat
 // 进行注册，之后再开启一个线程持续间隔发送HeartBeat
-func RegisterAndHeartBeat(registerAddr, serverAddr, codecType string, interval time.Duration) ([]string, []string, error) {
+func RegisterAndHeartBeat(registerUrl, serverAddr, codecType string, interval time.Duration) ([]string, []string, error) {
 	if interval == 0 {
 		interval = DEFAULT_HEARTBEAT_INTERVAL
 	}
 
-	if err := sendHeartBeat(registerAddr, serverAddr, codecType); err != nil {
+	if err := sendHeartBeat(registerUrl, serverAddr, codecType); err != nil {
 		return nil, nil, err
 	}
 
 	// 注册成功后获取可用服务列表
 	httpClient := &http.Client{}
-	req, _ := http.NewRequest("GET", registerAddr, nil)
+	req, _ := http.NewRequest("GET", registerUrl, nil)
 	rsp, err := httpClient.Do(req)
 
 	if err != nil {
@@ -174,7 +183,7 @@ func RegisterAndHeartBeat(registerAddr, serverAddr, codecType string, interval t
 			t := time.NewTicker(interval)
 			for {
 				<-t.C
-				if err := sendHeartBeat(registerAddr, serverAddr, codecType); err != nil {
+				if err := sendHeartBeat(registerUrl, serverAddr, codecType); err != nil {
 					log.Println("send heartbeat fail:"+err.Error())
 					break
 				}

@@ -4,7 +4,7 @@ import (
 	"simplecache/groupcache/lru"
 )
 
-// 通过某种方式pick到peer的接口，eg通过一致性hash获取到target peer的接口
+// PeerPicker 通过某种方式pick到peer的接口，eg通过一致性hash获取到target peer的接口
 type PeerPicker interface {
 	Pick(key string) (peer PeerGetter, ok bool)
 }

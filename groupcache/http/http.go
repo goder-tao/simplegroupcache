@@ -17,6 +17,7 @@ import (
 	"simplecache/groupcache/lru"
 	"simplecache/groupcache/pb"
 	"simplecache/groupcache/peer"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -26,37 +27,40 @@ const (
 	// 域名下用来做缓存之间通信的子路径
 	defaultBasePath = "/simplecache/"
 	defaultReplicas = 5
+	LISTEN_PORT = 13000
 )
 
-// 负责节点间通信的数据结构, 每个节点持有一个，保存所有获取到其他节点的信息和方式
+// 1. 负责节点间通信的数据结构, 每个节点持有一个，保存所有获取到其他节点的信息和方式
+// 2. 完成节点的选择（一致性hash）
 type HTTPPool struct {
-	addr string
-	basePath string
-	mu sync.Mutex
-	peerMap *consistenthash.Map
+	ipport        string
+	basePath      string
+	mu            sync.Mutex
+	peerMap       *consistenthash.Map
 	httpGetterMap map[string]*httpGetter // key ---> http://ip:port
 }
 
+// httpGetter 负责使用http从peer获得key对应数据
 type httpGetter struct {
 	// 远程节点的域名地址/basePath/
 	baseURL string
 }
 var _ peer.PeerGetter = (*httpGetter)(nil)
 
-func NewHTTPPool(self string) *HTTPPool {
+func NewHTTPPool(ipport string) *HTTPPool {
 	return &HTTPPool{
-		addr:     self,
+		ipport:   ipport,
 		basePath: defaultBasePath,
 	}
 }
 
 // <--- HTTPPool方法 --->
 func (p *HTTPPool) Log(format string, v ...interface{}) {
-	log.Printf("[Server %s] %s", p.addr, fmt.Sprintf(format, v...))
+	log.Printf("[Server %s] %s", p.ipport, fmt.Sprintf(format, v...))
 }
 
 func (p HTTPPool)GetAddr() string {
-	return p.addr
+	return p.ipport
 }
 
 // Set init or reset the pool member
@@ -67,7 +71,7 @@ func (p *HTTPPool) Set(urls ...string)  {
 	p.peerMap.Add(urls...)
 	p.httpGetterMap = make(map[string]*httpGetter)
 	for _, u := range urls {
-		p.httpGetterMap[u] = &httpGetter{baseURL: u+p.basePath}
+		p.httpGetterMap[u] = &httpGetter{baseURL: "http://"+u+strconv.Itoa(LISTEN_PORT)+p.basePath}
 	}
 }
 
@@ -75,11 +79,11 @@ func (p *HTTPPool) Set(urls ...string)  {
 func (p *HTTPPool) Pick(key string) (peer.PeerGetter, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if addr := p.peerMap.Get(key); addr != "" && addr != p.addr {
+	if addr := p.peerMap.Get(key); addr != "" && addr != p.ipport {
 		p.Log("pick peer %v", addr)
 		return p.httpGetterMap[addr], true
 	} else {
-		log.Println("pick self: "+p.addr)
+		log.Println("pick self: "+p.ipport)
 	}
 	return nil, false
 }
@@ -92,7 +96,7 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			log.Println("new peer:"+servers)
 			p.peerMap.Add(strings.Split(servers, ",")...)
 			for _, u := range strings.Split(servers, ",") {
-				p.httpGetterMap[u] = &httpGetter{baseURL: u+p.basePath}
+				p.httpGetterMap[u] = &httpGetter{baseURL: "http://"+u+strconv.Itoa(LISTEN_PORT)+p.basePath}
 			}
 		case "DELETE":
 			// bug
@@ -133,7 +137,7 @@ func (p *HTTPPool) servePeer(w http.ResponseWriter, r *http.Request)  {
 		return
 	}
 
-	view, err := m.Get(key)
+	view, err := m.PeerGet(key)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -3,7 +3,8 @@ package singleflight
 import "sync"
 
 type call struct {
-	wg sync.WaitGroup			// call.val 和 call.err 获取过程中由一个wg来保护
+	wg sync.WaitGroup		// wg来通知删除key
+	ch chan int				// 由channel来通知并发阻塞的其他g
 	val interface{}
 	err error
 }
@@ -14,24 +15,29 @@ type Group struct {
 	m map[string]*call // 保存并发同一个key的call
 }
 
+func New() *Group {
+	return &Group{
+		m: make(map[string]*call),
+	}
+}
+
 // DoOnce make sure that fn do only once
 func (g *Group) DoOnce(key string, fn func() (interface{}, error)) (interface{}, error) {
 	g.mu.Lock()
-	if g.m == nil {
-		g.m = make(map[string]*call)
-	}
 	if c, ok := g.m[key]; ok {
 		g.mu.Unlock()
-		c.wg.Wait()
+		<-c.ch
 		return c.val, c.err
 	}
 
 	c := new(call)
-	c.wg.Add(1)
 	g.m[key] = c
+	c.ch = make(chan int)
 	g.mu.Unlock()
+
 	c.val, c.err = fn()
-	c.wg.Done()
+	// notify other g that wait for the same key
+	close(c.ch)
 
 	g.mu.Lock()
 	delete(g.m, key)

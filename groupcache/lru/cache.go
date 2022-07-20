@@ -58,6 +58,10 @@ func (c *Cache) Remove() {
 	c.lru.Remove()
 }
 
+func (c *Cache) RemoveKey(key string) Value {
+	return c.lru.RemoveNode(key)
+}
+
 func (c *Cache) Get(key string) (ByteValue, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
